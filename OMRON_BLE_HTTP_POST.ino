@@ -1,43 +1,37 @@
+#include <M5Stack.h>
 #include "BLEDevice.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 bool MODE = false; //false = BLEMODE true = WIFIMODE
-BLEDevice* device;
-BLEScan* pBLEScan;
-static BLERemoteCharacteristic *pRemoteCharacteristic;
-#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  180        /* Time ESP32 will go to sleep (in seconds) */
 
+const char* root_ca = "your_root_ca";
 
-
+static String SensorAddr = "your_sensoraddr";
+static BLEUUID serviceUUID("0c4c3000-7700-46f4-aa96-d5e974e32a54");
+static BLEUUID    charUUID("0c4C3001-7700-46F4-AA96-D5E974E32A54");
+static BLEAddress *pServerAddress;
 
 char* ssid     = "ssid";
 char* password = "password";
 
-//postするサーバー
 char* server = "script.google.com";
-char* path = "/macros/s/{sheedID}/exec";
+char* path = "your_path";
 
-BLEUUID serviceUUID("0c4c3000-7700-46f4-aa96-d5e974e32a54");
-BLEUUID    charUUID("0c4C3001-7700-46F4-AA96-D5E974E32A54");
-
-
-const char* root_ca = "root_ca";
-
-                      static BLEAddress *pServerAddress;
-BLEClient*  pClient = NULL;
 static boolean doConnect = false;
+
 float temp = 0;
 float humi = 0;
 float press = 0;
 float illuminance = 0;
 
 
+
+
 //BLEのサーバーへ接続し、最新の値を取得する
 bool connectToServer(BLEAddress pAddress) {
   Serial.print("Forming a connection to ");
   Serial.println(pAddress.toString().c_str());
-  pClient  = BLEDevice::createClient();
+  BLEClient*  pClient  = BLEDevice::createClient();
   Serial.println(" - Created client");
 
   //BLEサーバーへ接続
@@ -61,30 +55,40 @@ bool connectToServer(BLEAddress pAddress) {
   } else {
     Serial.println(" - Found our service");
   }
-  static BLERemoteCharacteristic *pRemoteCharacteristic;
   // キャラクたりスティックを取得
+  static BLERemoteCharacteristic *pRemoteCharacteristic;
   pRemoteCharacteristic = pRemoteService->getCharacteristic(charUUID);
 
   //キャラクタリスティックを見つけられなかった場合
   if (pRemoteCharacteristic == nullptr) {
-    ;
     return false;
   }
 
   //生データを取得
+  std::string value = pRemoteCharacteristic->readValue();
+  Serial.print("The characteristic value was: ");
+  Serial.println(value.c_str());
   uint8_t* pData = pRemoteCharacteristic->readRawData();
   temp = (float)(pData[2] << 8 | pData[1]) / 100.0;  // データーから温度等を取り出す
   humi = (float)(pData[4] << 8 | pData[3]) / 100.0;
   press = (float)(pData[10] << 8 | pData[9]) / 10.0;
   illuminance = (float)(pData[6] << 8 | pData[5]);
   MODE = true;
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setCursor(5, 5);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.setTextSize(4);
+  M5.Lcd.printf("temp:%.2f\n", temp);
+  M5.Lcd.printf("hum:%.2f\n", humi);
+  M5.Lcd.printf("prs:%.1f\n", press);
+  M5.Lcd.printf("ilm:%.1f\n", illuminance);
 }
 
 
 //BLEをスキャンするクラス
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
-      BLEScan* pBLEScan = BLEDevice::getScan();
+      //BLEScan* pBLEScan = BLEDevice::getScan();
       Serial.println("BLE Advertised Device found: ");
       Serial.println(advertisedDevice.toString().c_str());
 
@@ -92,7 +96,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
       String deviceAddress = advertisedDevice.getAddress().toString().c_str();
       //Serial.println(deviceAddress.c_str());
       //ペリフェラルをアドレスで判断
-      if (deviceAddress.equalsIgnoreCase("ff:f7:ef:33:f4:31")) {
+      if (deviceAddress.equalsIgnoreCase(SensorAddr)) {
         advertisedDevice.getScan()->stop();
         Serial.print("Found our device!  address: ");
         //サーバーのアドレスを変数に代入
@@ -103,26 +107,11 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 };
 
 
-//deep_sleepから立ち上がった時
-void print_wakeup_reason() {
-  esp_sleep_wakeup_cause_t wakeup_reason;
-
-  wakeup_reason = esp_sleep_get_wakeup_cause();
-
-  switch (wakeup_reason)
-  {
-    case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
-    case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
-    case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
-    case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
-    case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
-    default : Serial.printf("Wakeup was not caused by deep sleep: %d\n", wakeup_reason); break;
-  }
-}
 
 
 void setup() {
-  print_wakeup_reason();
+  //print_wakeup_reason();
+  M5.begin();
   Serial.begin(115200);
   set_BLE();
 }
@@ -132,19 +121,17 @@ void setup() {
 void set_BLE() {
   Serial.println("BLE_START");
   BLEDevice::init("");
-  //device->init("");
-  pBLEScan = device->getScan();
+  BLEScan* pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
   pBLEScan->start(30);
   Serial.println("SCAN_START");
+  pBLEScan->stop();
 }
 
 //wifiをセットアップ
 void set_wifi() {
   Serial.println("WIFI_START");
-  WiFi.setAutoConnect(false);
-  WiFi.setAutoReconnect(false);
   WiFi.disconnect();
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -165,9 +152,9 @@ void data_post() {
   if (httpCode > 0) {
     // HTTP header has been send and Server response header has been handled
     Serial.printf("[HTTP] GET... code: %d\n", httpCode);
-    delay(1000);
+    delay(5000);
   } else {
-    delay(1000);
+    delay(5000);
     Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
   }
   http.end();
@@ -181,20 +168,17 @@ void loop() {
         Serial.println("We are now connected to the BLE Server.");
       } else {
         Serial.println("We have failed to connect to the server; there is nothin more we will do.");
+        doConnect = false;
       }
-      doConnect = false;
     }
   } else { //Wifi Modeの時
     //BLEclientをストップ
-    pClient->disconnect();
     delay(1000);
     //スキャンをストップ
-    pBLEScan->stop();
     delay(1000);
     //BLE関連をシャットダウン
-    device->deinit(true);
+    BLEDevice::deinit(true);
     delay(10000);
-
     //WifiStart
     set_wifi();
     delay(10000);
@@ -209,12 +193,6 @@ void loop() {
       Serial.println("disconnectting...");
     }
     Serial.println("disconected");
-    //ディープスリープを設定し、スタート
-    esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
-    Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
-                   " Seconds");
-    Serial.flush();
-    esp_deep_sleep_start();
+    ESP.restart();
   }
-  delay(1000);
 } // End of loop
